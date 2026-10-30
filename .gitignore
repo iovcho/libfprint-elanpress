@@ -1,0 +1,6 @@
+dist/
+upstream/
+*.rpm
+repo-publish/
+repo-git/
+rpmbuild/

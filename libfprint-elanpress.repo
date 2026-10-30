@@ -1,0 +1,6 @@
+[libfprint-elanpress]
+name=libfprint elanpress for Fedora 44
+baseurl=https://raw.githubusercontent.com/iovcho/libfprint-elanpress/repo/44/x86_64
+enabled=1
+gpgcheck=0
+repo_gpgcheck=0

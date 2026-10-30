@@ -1,0 +1,138 @@
+name: Fedora RPM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  ELANPRESS_COMMIT: fa2f98fb8cb56e72d9e316cd86a987456b137893
+  UPSTREAM: https://github.com/filip-rs/libfprint.git
+
+jobs:
+  rpm:
+    name: Build on Fedora 44
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:44
+    steps:
+      - name: Install git
+        run: dnf install -y git
+
+      - name: Checkout packaging
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          dnf install -y rpm-build redhat-rpm-config \
+            meson ninja-build gcc pkgconf-pkg-config \
+            glib2-devel libgusb-devel pixman-devel nss-devel cairo-devel \
+            libgudev-devel gobject-introspection-devel systemd-devel \
+            openssl-devel python3
+
+      - name: Archive upstream commit
+        run: |
+          git clone --filter=blob:none "$UPSTREAM" upstream
+          git -C upstream checkout "$ELANPRESS_COMMIT"
+          test "$(git -C upstream rev-parse HEAD)" = "$ELANPRESS_COMMIT"
+          mkdir -p "$HOME/rpmbuild/SOURCES"
+          git -C upstream archive --format=tar.gz --prefix=libfprint-1.94.10/ \
+            -o "$HOME/rpmbuild/SOURCES/libfprint-1.94.10.tar.gz" HEAD
+
+      - name: Build RPM
+        run: rpmbuild -bb libfprint.spec
+
+      - name: Check the package
+        run: |
+          shopt -s nullglob
+          rpm=( "$HOME"/rpmbuild/RPMS/x86_64/libfprint-1.94.10-*.x86_64.rpm )
+          test "${#rpm[@]}" -eq 1
+          evr=$(rpm -qp --queryformat '%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}' "${rpm[0]}")
+          echo "$evr"
+          case "$evr" in
+            1:libfprint-1.94.10-1.elanpress.fa2f98f*) ;;
+            *) echo "unexpected EVR: $evr" >&2; exit 1 ;;
+          esac
+          work=$(mktemp -d)
+          rpm2cpio "${rpm[0]}" | (cd "$work" && cpio -idmv)
+          strings "$work/usr/lib64/libfprint-2.so.2.0.0" | grep -q elanpress
+          test -f "$work/usr/lib/udev/rules.d/70-libfprint-2.rules"
+          test -f "$work/usr/lib/udev/hwdb.d/60-autosuspend-libfprint-2.hwdb"
+          mkdir -p dist
+          cp "${rpm[0]}" dist/libfprint-elanpress.fc44.x86_64.rpm
+          cp "${rpm[0]}" "dist/$(basename "${rpm[0]}")"
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfprint-elanpress-fc44
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  release:
+    name: Publish release and dnf repository
+    needs: rpm
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download RPM
+        uses: actions/download-artifact@v4
+        with:
+          name: libfprint-elanpress-fc44
+          path: dist
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=fc44
+          notes=$(cat <<'EOF'
+          Fedora 44 x86_64 build of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) `elanpress` at `fa2f98fb8cb56e72d9e316cd86a987456b137893`.
+
+          The package name is `libfprint` and the epoch is 1, so it replaces the distribution package and is not downgraded by a later Fedora update.
+
+          ```bash
+          sudo dnf install -y https://github.com/iovcho/libfprint-elanpress/releases/download/fc44/libfprint-elanpress.fc44.x86_64.rpm
+          ```
+
+          Fingerprints enrolled with the distribution driver do not carry over. Enroll again after installing. Builds made from this same elanpress commit keep their prints.
+          EOF
+          )
+          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create "$tag" dist/*.rpm \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Fedora 44" \
+            --notes "$notes" \
+            --latest
+
+      - name: Publish dnf repository branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y createrepo-c
+          rm -rf repo-publish
+          mkdir -p repo-publish/44/x86_64
+          cp dist/libfprint-1.94*.rpm repo-publish/44/x86_64/
+          createrepo_c repo-publish/44/x86_64
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-git
+          cd repo-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin repo; then
+            git checkout repo
+            find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          else
+            git checkout --orphan repo
+            git rm -rf . || true
+          fi
+          cp -a ../repo-publish/. .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "repository metadata unchanged"
+            exit 0
+          fi
+          git commit -m "Update Fedora 44 libfprint elanpress repository"
+          git push origin HEAD:repo
