@@ -11,6 +11,7 @@ Source0:        libfprint-%{version}.tar.gz
 BuildRequires:  meson >= 0.56.0
 BuildRequires:  ninja-build
 BuildRequires:  gcc
+BuildRequires:  gcc-c++
 BuildRequires:  pkgconfig
 BuildRequires:  glib2-devel
 BuildRequires:  libgusb-devel

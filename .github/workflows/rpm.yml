@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: fedora:44
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Install git
         run: dnf install -y git
@@ -28,7 +31,7 @@ jobs:
       - name: Install build tools
         run: |
           dnf install -y rpm-build redhat-rpm-config \
-            meson ninja-build gcc pkgconf-pkg-config \
+            meson ninja-build gcc gcc-c++ pkgconf-pkg-config \
             glib2-devel libgusb-devel pixman-devel nss-devel cairo-devel \
             libgudev-devel gobject-introspection-devel systemd-devel \
             openssl-devel python3
