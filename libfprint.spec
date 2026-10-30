@@ -1,7 +1,7 @@
 Name:           libfprint
 Epoch:          1
 Version:        %{elanpress_version}
-Release:        1.%{elanpress_stamp}git%{elanpress_short}%{?dist}
+Release:        2.%{elanpress_stamp}git%{elanpress_short}%{?dist}
 Summary:        Fingerprint library with the elanpress driver for ELAN 04f3:0c6e
 
 License:        LGPL-2.1-or-later
@@ -37,8 +37,9 @@ The fork speaks the press protocol. The distribution driver treats this
 sensor as a swipe device and fails identification with a protocol error.
 
 Epoch 1 keeps dnf from replacing this package with the newer upstream
-version shipped by Fedora. Remove this repository and reinstall libfprint
-from Fedora to return to the distribution build.
+version shipped by Fedora. Disable this repository and run
+dnf distro-sync libfprint to return to the distribution build.
+Older builds stay in the repository for dnf downgrade.
 
 %prep
 %autosetup -n libfprint-%{version}
@@ -70,5 +71,6 @@ from Fedora to return to the distribution build.
 %{_datadir}/metainfo/org.freedesktop.libfprint.metainfo.xml
 
 %changelog
-* Fri Oct 30 2026 Yovcho Yovchev <iovcho.iovchev@gmail.com> - 1:1.94.10-1
+* Fri Oct 30 2026 Yovcho Yovchev - 1:1.94.10-2
 - Track the elanpress branch. The release carries the commit time and a short SHA.
+- Keep older builds in the repository for dnf downgrade.

@@ -117,11 +117,21 @@ jobs:
           test "${#rpm[@]}" -eq 1
           evr=$(rpm -qp --queryformat '%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}' "${rpm[0]}")
           echo "$evr"
-          expected="1:libfprint-${ELANPRESS_VERSION}-1.${ELANPRESS_STAMP}git${ELANPRESS_SHORT}"
+          expected="1:libfprint-${ELANPRESS_VERSION}-2.${ELANPRESS_STAMP}git${ELANPRESS_SHORT}"
           case "$evr" in
             "$expected"*) ;;
             *) echo "unexpected EVR: $evr" >&2; exit 1 ;;
           esac
+          changelog=$(mktemp)
+          if ! rpm -qp --changelog "${rpm[0]}" > "$changelog"; then
+            echo "cannot read changelog" >&2
+            exit 1
+          fi
+          if grep -q '@' "$changelog"; then
+            echo "changelog must not contain an email address" >&2
+            exit 1
+          fi
+          rm -f "$changelog"
           work=$(mktemp -d)
           rpm2cpio "${rpm[0]}" | (cd "$work" && cpio -idmv)
           grep -a -q elanpress "$work/usr/lib64/libfprint-2.so.2.0.0"
@@ -157,48 +167,82 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
           tag=fc44
           notes=$(cat <<EOF
-          Fedora 44 x86_64 build of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) \`elanpress\` at \`${ELANPRESS_COMMIT}\`.
+          Fedora 44 x86_64 builds of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) \`elanpress\`.
 
-          The package name is \`libfprint\` and the epoch is 1, so it replaces the distribution package and is not downgraded by a later Fedora update. A newer \`elanpress\` commit is picked up within an hour.
+          Latest commit: \`${ELANPRESS_COMMIT}\`.
 
-          \`\`\`bash
-          sudo dnf install -y https://github.com/iovcho/libfprint-elanpress/releases/download/fc44/libfprint-elanpress.fc44.x86_64.rpm
-          \`\`\`
-
-          Fingerprints enrolled with the distribution driver do not carry over. Enroll again after the first switch. Later builds of this package keep prints enrolled with \`elanpress\`.
+          Older RPMs stay attached to this release and in the dnf repository, so \`dnf downgrade libfprint\` can select one. Install, upgrade, downgrade, and the return to Fedora's package are described in the repository README.
           EOF
           )
-          gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-          gh release create "$tag" dist/*.rpm \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "Fedora 44 (${ELANPRESS_SHORT})" \
-            --notes "$notes" \
-            --latest
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            mkdir -p old-assets
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir old-assets --pattern '*.rpm' || true
+            shopt -s nullglob
+            for asset in old-assets/*.rpm; do
+              changelog=$(mktemp)
+              if ! rpm -qp --changelog "$asset" > "$changelog"; then
+                echo "cannot read changelog of $(basename "$asset")" >&2
+                exit 1
+              fi
+              if grep -q '@' "$changelog"; then
+                gh release delete-asset "$tag" "$(basename "$asset")" --repo "$GITHUB_REPOSITORY" --yes
+              fi
+              rm -f "$changelog"
+            done
+            gh release upload "$tag" dist/*.rpm --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "Fedora 44 (${ELANPRESS_SHORT})" \
+              --notes "$notes" \
+              --latest
+          else
+            gh release create "$tag" dist/*.rpm \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Fedora 44 (${ELANPRESS_SHORT})" \
+              --notes "$notes" \
+              --latest
+          fi
 
       - name: Publish dnf repository branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y createrepo-c
+          sudo apt-get install -y createrepo-c rpm
           rm -rf repo-publish
           mkdir -p repo-publish/44/x86_64
-          cp dist/libfprint-[0-9]*.rpm repo-publish/44/x86_64/
-          createrepo_c repo-publish/44/x86_64
-          printf '%s\n' "$ELANPRESS_COMMIT" > repo-publish/built-commit
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-git
           cd repo-git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git ls-remote --exit-code --heads origin repo; then
             git checkout repo
+            shopt -s nullglob
+            for asset in 44/x86_64/*.rpm; do
+              changelog=$(mktemp)
+              if ! rpm -qp --changelog "$asset" > "$changelog"; then
+                echo "cannot read changelog of $(basename "$asset")" >&2
+                exit 1
+              fi
+              if grep -q '@' "$changelog"; then
+                echo "dropping $(basename "$asset")"
+                rm -f "$changelog"
+                continue
+              fi
+              rm -f "$changelog"
+              cp "$asset" ../repo-publish/44/x86_64/
+            done
             find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
           else
             git checkout --orphan repo
             git rm -rf . || true
           fi
+          cp ../dist/libfprint-[0-9]*.rpm ../repo-publish/44/x86_64/
+          createrepo_c ../repo-publish/44/x86_64
+          printf '%s\n' "$ELANPRESS_COMMIT" > ../repo-publish/built-commit
           cp -a ../repo-publish/. .
           git add -A
           if git diff --cached --quiet; then
