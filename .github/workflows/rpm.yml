@@ -61,7 +61,7 @@ jobs:
           esac
           work=$(mktemp -d)
           rpm2cpio "${rpm[0]}" | (cd "$work" && cpio -idmv)
-          strings "$work/usr/lib64/libfprint-2.so.2.0.0" | grep -q elanpress
+          grep -a -q elanpress "$work/usr/lib64/libfprint-2.so.2.0.0"
           test -f "$work/usr/lib/udev/rules.d/70-libfprint-2.rules"
           test -f "$work/usr/lib/udev/hwdb.d/60-autosuspend-libfprint-2.hwdb"
           mkdir -p dist
