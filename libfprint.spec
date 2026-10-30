@@ -20,6 +20,7 @@ BuildRequires:  nss-devel
 BuildRequires:  cairo-devel
 BuildRequires:  libgudev-devel
 BuildRequires:  gobject-introspection-devel
+BuildRequires:  pkgconfig(udev)
 BuildRequires:  systemd-devel
 BuildRequires:  openssl-devel
 BuildRequires:  python3
