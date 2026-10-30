@@ -1,7 +1,7 @@
 Name:           libfprint
 Epoch:          1
-Version:        1.94.10
-Release:        1.elanpress.fa2f98f%{?dist}
+Version:        %{elanpress_version}
+Release:        1.%{elanpress_stamp}git%{elanpress_short}%{?dist}
 Summary:        Fingerprint library with the elanpress driver for ELAN 04f3:0c6e
 
 License:        LGPL-2.1-or-later
@@ -30,8 +30,8 @@ Obsoletes:      libfprint-devel < %{epoch}:%{version}-%{release}
 
 %description
 libfprint with the elanpress driver for the ELAN 04f3:0c6e press sensor
-used in several ASUS laptops. This build tracks commit fa2f98f of the
-elanpress branch and replaces the distribution libfprint package.
+used in several ASUS laptops. This build tracks the elanpress branch at
+commit %{elanpress_short} and replaces the distribution libfprint package.
 
 The fork speaks the press protocol. The distribution driver treats this
 sensor as a swipe device and fails identification with a protocol error.
@@ -70,5 +70,5 @@ from Fedora to return to the distribution build.
 %{_datadir}/metainfo/org.freedesktop.libfprint.metainfo.xml
 
 %changelog
-* Fri Oct 30 2026 Yovcho Yovchev <iovcho.iovchev@gmail.com> - 1:1.94.10-1.elanpress.fa2f98f
-- Package the elanpress fork for Fedora, pinned to fa2f98f.
+* Fri Oct 30 2026 Yovcho Yovchev <iovcho.iovchev@gmail.com> - 1:1.94.10-1
+- Track the elanpress branch. The release carries the commit time and a short SHA.

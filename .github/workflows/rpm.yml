@@ -1,26 +1,82 @@
 name: Fedora RPM
 
 on:
+  schedule:
+    - cron: '17 * * * *'
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: fedora-rpm
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 env:
-  ELANPRESS_COMMIT: fa2f98fb8cb56e72d9e316cd86a987456b137893
   UPSTREAM: https://github.com/filip-rs/libfprint.git
 
 jobs:
+  check:
+    name: Check elanpress
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.upstream.outputs.build }}
+      commit: ${{ steps.upstream.outputs.commit }}
+      short: ${{ steps.upstream.outputs.short }}
+      stamp: ${{ steps.upstream.outputs.stamp }}
+      version: ${{ steps.upstream.outputs.version }}
+    steps:
+      - name: Compare with the last built commit
+        id: upstream
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch elanpress "$UPSTREAM" upstream
+          sha=$(git -C upstream rev-parse HEAD)
+          short=$(git -C upstream rev-parse --short=7 HEAD)
+          committed=$(git -C upstream log -1 --format=%ct)
+          stamp=$(date -u -d "@${committed}" +%Y%m%d%H%M%S)
+          version=$(sed -n "s/^[[:space:]]*version:[[:space:]]*'\([^']*\)'.*/\1/p" upstream/meson.build | head -1)
+          test -n "$version"
+          last=""
+          http=$(curl -sS -o built-commit -w '%{http_code}' \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/repo/built-commit" || true)
+          if [ "$http" = "200" ]; then
+            last=$(tr -d '[:space:]' < built-commit)
+          fi
+          echo "upstream ${sha}"
+          echo "last     ${last:-<none>}"
+          echo "version  ${version}"
+          echo "release  1.${stamp}git${short}"
+          build=true
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$sha" = "$last" ]; then
+            build=false
+            echo "elanpress is unchanged; skipping the RPM build"
+          fi
+          {
+            echo "build=${build}"
+            echo "commit=${sha}"
+            echo "short=${short}"
+            echo "stamp=${stamp}"
+            echo "version=${version}"
+          } >> "$GITHUB_OUTPUT"
+
   rpm:
     name: Build on Fedora 44
+    needs: check
+    if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     container:
       image: fedora:44
     defaults:
       run:
         shell: bash
+    env:
+      ELANPRESS_COMMIT: ${{ needs.check.outputs.commit }}
+      ELANPRESS_STAMP: ${{ needs.check.outputs.stamp }}
+      ELANPRESS_SHORT: ${{ needs.check.outputs.short }}
+      ELANPRESS_VERSION: ${{ needs.check.outputs.version }}
     steps:
       - name: Install git
         run: dnf install -y git
@@ -42,21 +98,28 @@ jobs:
           git -C upstream checkout "$ELANPRESS_COMMIT"
           test "$(git -C upstream rev-parse HEAD)" = "$ELANPRESS_COMMIT"
           mkdir -p "$HOME/rpmbuild/SOURCES"
-          git -C upstream archive --format=tar.gz --prefix=libfprint-1.94.10/ \
-            -o "$HOME/rpmbuild/SOURCES/libfprint-1.94.10.tar.gz" HEAD
+          git -C upstream archive --format=tar.gz \
+            --prefix="libfprint-${ELANPRESS_VERSION}/" \
+            -o "$HOME/rpmbuild/SOURCES/libfprint-${ELANPRESS_VERSION}.tar.gz" HEAD
 
       - name: Build RPM
-        run: rpmbuild -bb libfprint.spec
+        run: |
+          rpmbuild -bb libfprint.spec \
+            --define "elanpress_version ${ELANPRESS_VERSION}" \
+            --define "elanpress_commit ${ELANPRESS_COMMIT}" \
+            --define "elanpress_stamp ${ELANPRESS_STAMP}" \
+            --define "elanpress_short ${ELANPRESS_SHORT}"
 
       - name: Check the package
         run: |
           shopt -s nullglob
-          rpm=( "$HOME"/rpmbuild/RPMS/x86_64/libfprint-1.94.10-*.x86_64.rpm )
+          rpm=( "$HOME"/rpmbuild/RPMS/x86_64/libfprint-[0-9]*.x86_64.rpm )
           test "${#rpm[@]}" -eq 1
           evr=$(rpm -qp --queryformat '%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}' "${rpm[0]}")
           echo "$evr"
+          expected="1:libfprint-${ELANPRESS_VERSION}-1.${ELANPRESS_STAMP}git${ELANPRESS_SHORT}"
           case "$evr" in
-            1:libfprint-1.94.10-1.elanpress.fa2f98f*) ;;
+            "$expected"*) ;;
             *) echo "unexpected EVR: $evr" >&2; exit 1 ;;
           esac
           work=$(mktemp -d)
@@ -77,8 +140,12 @@ jobs:
 
   release:
     name: Publish release and dnf repository
-    needs: rpm
+    needs: [check, rpm]
+    if: needs.check.outputs.build == 'true' && needs.rpm.result == 'success'
     runs-on: ubuntu-latest
+    env:
+      ELANPRESS_COMMIT: ${{ needs.check.outputs.commit }}
+      ELANPRESS_SHORT: ${{ needs.check.outputs.short }}
     steps:
       - name: Download RPM
         uses: actions/download-artifact@v4
@@ -91,22 +158,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag=fc44
-          notes=$(cat <<'EOF'
-          Fedora 44 x86_64 build of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) `elanpress` at `fa2f98fb8cb56e72d9e316cd86a987456b137893`.
+          notes=$(cat <<EOF
+          Fedora 44 x86_64 build of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) \`elanpress\` at \`${ELANPRESS_COMMIT}\`.
 
-          The package name is `libfprint` and the epoch is 1, so it replaces the distribution package and is not downgraded by a later Fedora update.
+          The package name is \`libfprint\` and the epoch is 1, so it replaces the distribution package and is not downgraded by a later Fedora update. A newer \`elanpress\` commit is picked up within an hour.
 
-          ```bash
+          \`\`\`bash
           sudo dnf install -y https://github.com/iovcho/libfprint-elanpress/releases/download/fc44/libfprint-elanpress.fc44.x86_64.rpm
-          ```
+          \`\`\`
 
-          Fingerprints enrolled with the distribution driver do not carry over. Enroll again after installing. Builds made from this same elanpress commit keep their prints.
+          Fingerprints enrolled with the distribution driver do not carry over. Enroll again after the first switch. Later builds of this package keep prints enrolled with \`elanpress\`.
           EOF
           )
           gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
           gh release create "$tag" dist/*.rpm \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Fedora 44" \
+            --title "Fedora 44 (${ELANPRESS_SHORT})" \
             --notes "$notes" \
             --latest
 
@@ -118,8 +185,9 @@ jobs:
           sudo apt-get install -y createrepo-c
           rm -rf repo-publish
           mkdir -p repo-publish/44/x86_64
-          cp dist/libfprint-1.94*.rpm repo-publish/44/x86_64/
+          cp dist/libfprint-[0-9]*.rpm repo-publish/44/x86_64/
           createrepo_c repo-publish/44/x86_64
+          printf '%s\n' "$ELANPRESS_COMMIT" > repo-publish/built-commit
           git clone "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo-git
           cd repo-git
           git config user.name "github-actions[bot]"

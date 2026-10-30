@@ -2,7 +2,7 @@
 
 RPM build of [filip-rs/libfprint](https://github.com/filip-rs/libfprint) branch `elanpress` for the ELAN `04f3:0c6e` press sensor. The distribution `libfprint` treats that sensor as a swipe reader, and identification fails with `The driver encountered a protocol error with the device`.
 
-The package is pinned to commit `fa2f98fb8cb56e72d9e316cd86a987456b137893`. Its name is `libfprint` and its epoch is 1, so `dnf upgrade` does not replace it with Fedora's newer upstream version.
+The package tracks the `elanpress` branch. Once an hour the workflow reads the latest commit and, when it differs from the last build, publishes a new RPM. The release contains that commit's time and a short SHA, so `dnf upgrade` can see it. The package name is `libfprint` and the epoch is 1, so a Fedora update does not replace it with the distribution build.
 
 ## Install
 
@@ -43,4 +43,4 @@ sudo dnf install libfprint
 
 ## Build
 
-GitHub Actions builds the RPM on a standard runner in a `fedora:44` container. Standard GitHub-hosted runners are free for this public repository. The workflow publishes the RPM on the `fc44` release and refreshes the `repo` branch used by `dnf`.
+GitHub Actions checks `elanpress` every hour (`17 * * * *`). A new commit starts a build in a `fedora:44` container on a standard runner. The RPM is published on the `fc44` release, and the `repo` branch used by `dnf` is refreshed. An unchanged commit does not rebuild. A push to this repository builds the current `elanpress` commit even when it was built before.
